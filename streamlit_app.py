@@ -45,7 +45,7 @@ def login_screen():
     with tab_new:
         st.info(
             "Anyone in the family is welcome. After you create an account, "
-            "Allen adds you to the contributor list and you can start editing."
+            "tell us who you are and an admin will let you in."
         )
         with st.form("signup"):
             email = st.text_input("Email", key="su_email")
@@ -59,10 +59,7 @@ def login_screen():
                 else:
                     try:
                         db.sign_up(email.strip(), pw)
-                        st.success(
-                            "Account created. Check your email for a confirmation "
-                            "link, then let Allen know so he can add you."
-                        )
+                        st.success("Account created. Now sign in on the first tab.")
                     except Exception as e:
                         st.error(f"Could not create the account: {e}")
 
@@ -77,14 +74,61 @@ def login_screen():
                     st.error(f"Could not send it: {e}")
 
 
-def not_enrolled_screen(user):
+def join_request_screen(user):
+    """Shown to someone who has signed in but is not yet a contributor."""
     st.title("🌳 Our Family Tree")
-    st.warning("You are signed in, but not on the contributor list yet.")
+
+    status = db.my_join_status()
+
+    if status == "pending":
+        st.info("**Your request is in.** An admin will let you in shortly.")
+        st.caption(
+            "You will not need to do anything else — next time you sign in, "
+            "you will be straight into the tree."
+        )
+        st.caption(f"Signed in as {user.email}")
+        if st.button("Sign out"):
+            db.sign_out()
+            st.rerun()
+        return
+
+    if status == "declined":
+        st.warning("That request was not approved. Have a word with Allen.")
+        if st.button("Sign out"):
+            db.sign_out()
+            st.rerun()
+        return
+
     st.write(
-        "Send Allen the address below and he will add you. This is the only "
-        "thing standing between you and editing."
+        "Welcome. Tell us who you are and you will be let in — usually the "
+        "same day."
     )
-    st.code(user.id, language=None)
+
+    with st.form("joinreq"):
+        name = st.text_input(
+            "Your name *",
+            placeholder="Alden DoRosario",
+            help="How the family knows you. This appears next to anything you add.",
+        )
+        rel = st.text_input(
+            "How are you related?",
+            placeholder="Allen's cousin, Ruth's son",
+        )
+        msg = st.text_area(
+            "Anything you want to add",
+            placeholder="I have Grandma's photo albums and her old bible.",
+            height=80,
+        )
+        if st.form_submit_button("Ask to join", type="primary", use_container_width=True):
+            if not name.strip():
+                st.error("Please tell us your name.")
+            else:
+                try:
+                    db.request_to_join(name, rel, msg)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not send that: {e}")
+
     st.caption(f"Signed in as {user.email}")
     if st.button("Sign out"):
         db.sign_out()
@@ -103,7 +147,7 @@ def main():
 
     contributor = db.me()
     if not contributor:
-        not_enrolled_screen(user)
+        join_request_screen(user)
         return
 
     import family_pages_people as pp
@@ -114,20 +158,25 @@ def main():
         st.markdown("### 🌳 Family Tree")
         st.caption(f"Signed in as **{contributor['display_name']}**")
 
-        page = st.radio(
-            "Go to",
-            [
-                "Home",
-                "Find a person",
-                "Add a person",
-                "Marriages & children",
-                "Ancestors & descendants",
-                "What's changed",
-                "Disagreements",
-                "Reports",
-            ],
-            label_visibility="collapsed",
-        )
+        pages = [
+            "Home",
+            "Find a person",
+            "Add a person",
+            "Marriages & children",
+            "Ancestors & descendants",
+            "What's changed",
+            "Disagreements",
+            "Reports",
+        ]
+        waiting = 0
+        if contributor.get("is_admin"):
+            waiting = len(db.pending_requests())
+            pages.append(f"Approvals ({waiting})" if waiting else "Approvals")
+
+        page = st.radio("Go to", pages, label_visibility="collapsed")
+
+        if waiting:
+            st.warning(f"{waiting} waiting to join")
 
         st.divider()
         if st.button("Sign out", use_container_width=True):
@@ -155,6 +204,8 @@ def main():
         pr.disputes_page()
     elif page == "Reports":
         pr.reports_page()
+    elif page.startswith("Approvals"):
+        pr.approvals_page()
 
 
 # ===================================================================
