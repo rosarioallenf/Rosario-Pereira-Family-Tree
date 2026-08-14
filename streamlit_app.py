@@ -21,6 +21,40 @@ st.set_page_config(
 
 
 # ===================================================================
+# HOW TO USE
+# ===================================================================
+# The guide lives outside the app as a PDF, so it can be updated without
+# touching any code. Put the file in Google Drive (or Dropbox / OneDrive),
+# share it as "anyone with the link can view", and paste the link below.
+# Updating the document in Drive updates what everyone sees - no redeploy.
+
+HELP_URL = ""   # <-- paste the share link here, between the quotes
+
+
+def help_page():
+    st.title("How to use this")
+
+    if not HELP_URL:
+        st.info(
+            "The guide has not been linked yet. Allen: put the PDF in Google "
+            "Drive, share it so anyone with the link can view, and paste the "
+            "link into HELP_URL near the top of streamlit_app.py."
+        )
+        return
+
+    st.write(
+        "A short guide covering how to add people, how to connect them up, "
+        "and the few conventions worth following."
+    )
+    st.link_button("Open the guide", HELP_URL,
+                   type="primary", use_container_width=True)
+    st.caption(
+        "Opens in a new tab. If you would rather keep a copy, download it "
+        "from there — but the version at this link is always the current one."
+    )
+
+
+# ===================================================================
 # SIGN IN
 # ===================================================================
 
@@ -167,6 +201,7 @@ def main():
             "What's changed",
             "Disagreements",
             "Reports",
+            "How to use this",
         ]
         waiting = 0
         if contributor.get("is_admin"):
@@ -182,6 +217,9 @@ def main():
         if st.button("Sign out", use_container_width=True):
             db.sign_out()
             st.rerun()
+
+        if HELP_URL:
+            st.link_button("How to use this", HELP_URL, use_container_width=True)
 
         st.caption(
             "Everything you add is credited to you. "
@@ -204,6 +242,8 @@ def main():
         pr.disputes_page()
     elif page == "Reports":
         pr.reports_page()
+    elif page == "How to use this":
+        help_page()
     elif page.startswith("Approvals"):
         pr.approvals_page()
 
@@ -266,7 +306,7 @@ def home(contributor):
         st.write(
             f"**{ch['changed_by_name']}** {verb.get(ch['action'], ch['action'].lower())} "
             f"{ch.get('subject_label') or ch['record_id']}{detail}  \n"
-            f"<span style='color:#888;font-size:0.85em'>{when}</span>",
+        f"<span style='color:#888;font-size:0.85em'>{when}</span>",
             unsafe_allow_html=True,
         )
 
