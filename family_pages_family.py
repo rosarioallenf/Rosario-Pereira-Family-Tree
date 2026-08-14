@@ -36,12 +36,26 @@ def _new_family():
         st.info("Add some people first.")
         return
 
+    if st.session_state.get("_just_married"):
+        m = st.session_state["_just_married"]
+        st.success(f"Saved **{m['label']}** as {m['id']}.")
+        st.info("Next: link their children on the first tab.")
+        c = st.columns(2)
+        if c[0].button("Record another marriage", type="primary",
+                       use_container_width=True):
+            del st.session_state["_just_married"]
+            st.rerun()
+        if c[1].button("Done", use_container_width=True):
+            del st.session_state["_just_married"]
+            st.rerun()
+        return
+
     st.caption(
         "Record a marriage or partnership. For someone who married twice, "
         "record two separate marriages — that is what keeps the children straight."
     )
 
-    with st.form("newfam"):
+    with st.form("newfam", clear_on_submit=True):
         c = st.columns(2)
         p1 = c[0].selectbox("Partner 1", ["-"] + list(opts.keys()))
         p2 = c[1].selectbox("Partner 2", ["-"] + list(opts.keys()))
@@ -57,32 +71,65 @@ def _new_family():
 
         notes = st.text_area("Notes")
 
-        if st.form_submit_button("Save marriage", type="primary"):
-            if p1 == "-" and p2 == "-":
-                st.error("Choose at least one partner.")
-            elif p1 != "-" and p1 == p2:
-                st.error("A person cannot marry themselves.")
-            else:
-                try:
-                    fid = db.add_family({
-                        "partner1_id": opts.get(p1),
-                        "partner2_id": opts.get(p2),
-                        "union_status_code": status or None,
-                        "how_ended_code": ended or None,
-                        "marriage_date_text": mdate,
-                        "marriage_year": int(myear) if myear else None,
-                        "marriage_place": mplace,
-                        "notes": notes,
-                    })
-                    st.success(f"Saved as {fid}. Now link their children on the first tab.")
-                except Exception as e:
-                    st.error(_friendly(e))
+        submitted = st.form_submit_button("Save marriage", type="primary")
+
+    if not submitted:
+        return
+
+    if p1 == "-" and p2 == "-":
+        st.error("Choose at least one partner.")
+        return
+    if p1 != "-" and p1 == p2:
+        st.error("A person cannot marry themselves.")
+        return
+
+    id1, id2 = opts.get(p1), opts.get(p2)
+
+    # Already recorded? Two rows for the same couple is the usual double-click.
+    for f in db.all_families():
+        pair_now = {id1, id2} - {None}
+        pair_old = {f.get("partner1_id"), f.get("partner2_id")} - {None}
+        if pair_now and pair_now == pair_old:
+            st.warning(
+                f"That couple is already recorded as **{f['family_id']}**. "
+                "Not saving a second one — see 'All marriages' to edit it."
+            )
+            return
+
+    try:
+        fid = db.add_family({
+            "partner1_id": id1,
+            "partner2_id": id2,
+            "union_status_code": status or None,
+            "how_ended_code": ended or None,
+            "marriage_date_text": mdate,
+            "marriage_year": int(myear) if myear else None,
+            "marriage_place": mplace,
+            "notes": notes,
+        })
+        label = " & ".join(x for x in [db.name_of(id1), db.name_of(id2)] if x)
+        st.session_state["_just_married"] = {"id": fid, "label": label}
+        st.rerun()
+    except Exception as e:
+        st.error(_friendly(e))
 
 
 def _link_child():
     fams = db.all_families()
     if not fams:
         st.info("Record a marriage first — children attach to a marriage.")
+        return
+
+    if st.session_state.get("_just_linked"):
+        j = st.session_state["_just_linked"]
+        st.success(f"Linked **{j['child']}** to {j['family']}.")
+        c = st.columns(2)
+        if c[0].button("Link another child", type="primary", use_container_width=True):
+            del st.session_state["_just_linked"]
+            st.rerun()
+        if c[1].button("Done", use_container_width=True):
+            del st.session_state["_just_linked"]
+            st.rerun()
         return
 
     people_opts = db.people_options()
@@ -93,29 +140,38 @@ def _link_child():
         yr = f" ({f['marriage_year']})" if f.get("marriage_year") else ""
         fam_opts[f"{f['family_id']} - {n1} & {n2}{yr}"] = f["family_id"]
 
-    with st.form("linkchild"):
+    with st.form("linkchild", clear_on_submit=True):
         fam_pick = st.selectbox("Whose child?", list(fam_opts.keys()))
         child_pick = st.selectbox("Which child", ["-"] + list(people_opts.keys()))
         c = st.columns(2)
         order = c[0].number_input("Birth order", 1, 30, step=1, value=None,
                                   help="1 = eldest. Leave blank if unsure.")
         rel = c[1].selectbox("Relationship", db.child_rels())
-        notes = st.text_input("Notes")
+        submitted = st.form_submit_button("Link", type="primary")
 
-        if st.form_submit_button("Link", type="primary"):
-            if child_pick == "-":
-                st.error("Choose a child.")
-            else:
-                try:
-                    db.link_child(fam_opts[fam_pick], people_opts[child_pick], order, rel)
-                    st.success("Linked.")
-                except Exception as e:
-                    st.error(_friendly(e))
+    if not submitted:
+        return
 
-    st.divider()
-    st.caption(
-        "Not in the list? Add them on the **Add a person** page first, then come back."
-    )
+    if child_pick == "-":
+        st.error("Choose a child.")
+        return
+
+    fid = fam_opts[fam_pick]
+    cid = people_opts[child_pick]
+
+    if any(l["child_id"] == cid for l in db.children_of_family(fid)):
+        st.warning("That child is already linked to that marriage.")
+        return
+
+    try:
+        db.link_child(fid, cid, order, rel)
+        st.session_state["_just_linked"] = {
+            "child": db.name_of(cid),
+            "family": fam_pick.split(" - ", 1)[-1],
+        }
+        st.rerun()
+    except Exception as e:
+        st.error(_friendly(e))
 
 
 def _list_families():
@@ -123,6 +179,11 @@ def _list_families():
     if not fams:
         st.caption("No marriages recorded yet.")
         return
+
+    st.caption(
+        "Everything recorded so far. Open one to see its children, or to "
+        "remove a duplicate."
+    )
 
     for f in fams:
         n1 = db.name_of(f["partner1_id"]) or "—"
@@ -153,6 +214,32 @@ def _list_families():
                         st.rerun()
             else:
                 st.caption("No children recorded.")
+
+            st.divider()
+            key = f"delfam_{f['family_id']}"
+            if st.session_state.get(key):
+                st.warning(
+                    f"Remove this marriage? {len(kids)} child link(s) will be "
+                    f"removed with it. **{n1} and {n2} themselves are not "
+                    "touched.** This can be undone from What's changed."
+                )
+                c = st.columns(2)
+                if c[0].button("Yes, remove it", key=f"yes_{f['family_id']}",
+                               type="primary", use_container_width=True):
+                    try:
+                        db.soft_delete_family(f["family_id"])
+                        del st.session_state[key]
+                        st.rerun()
+                    except Exception as e:
+                        st.error(_friendly(e))
+                if c[1].button("Cancel", key=f"no_{f['family_id']}",
+                               use_container_width=True):
+                    del st.session_state[key]
+                    st.rerun()
+            else:
+                if st.button("Remove this marriage", key=f"ask_{f['family_id']}"):
+                    st.session_state[key] = True
+                    st.rerun()
 
 
 # ===================================================================
