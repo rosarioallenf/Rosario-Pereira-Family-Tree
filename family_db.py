@@ -457,3 +457,38 @@ def admins() -> list[dict]:
         return tbl("v_admins").select("*").execute().data or []
     except Exception:
         return []
+
+
+def my_join_status() -> str:
+    try:
+        return rpc("my_join_status").execute().data or "none"
+    except Exception:
+        return "none"
+
+
+def request_to_join(display_name: str, relationship: str, message: str = ""):
+    user = current_user()
+    return tbl("join_request").insert({
+        "user_id": user.id,
+        "email": user.email,
+        "display_name": display_name.strip(),
+        "relationship": relationship.strip() or None,
+        "message": message.strip() or None,
+    }).execute()
+
+
+def pending_requests() -> list[dict]:
+    try:
+        r = (tbl("join_request").select("*")
+             .eq("status", "pending").order("requested_at").execute())
+        return r.data or []
+    except Exception:
+        return []
+
+
+def approve_request(request_id: int) -> str:
+    return rpc("approve_join_request", {"p_request_id": request_id}).execute().data
+
+
+def decline_request(request_id: int) -> str:
+    return rpc("decline_join_request", {"p_request_id": request_id}).execute().data
