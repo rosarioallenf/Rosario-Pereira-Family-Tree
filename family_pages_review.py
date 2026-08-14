@@ -222,3 +222,48 @@ def reports_page():
             mime="text/csv",
         )
         st.caption(f"{len(df)} people in this file.")
+
+
+def approvals_page():
+    st.title("Approvals")
+    st.caption(
+        "Relatives who have signed up and are waiting to be let in. "
+        "Approving takes one click — no SQL, no copying IDs around."
+    )
+
+    pending = db.pending_requests()
+
+    if not pending:
+        st.success("Nobody waiting.")
+    else:
+        for r in pending:
+            with st.container(border=True):
+                st.markdown(f"### {r['display_name']}")
+                bits = [x for x in [r.get("relationship"), r.get("email")] if x]
+                if bits:
+                    st.caption(" · ".join(bits))
+                if r.get("message"):
+                    st.write(f"_{r['message']}_")
+                st.caption(f"Asked {str(r['requested_at'])[:16].replace('T', ' ')}")
+
+                c = st.columns([1, 1, 3])
+                if c[0].button("Approve", key=f"ap_{r['request_id']}",
+                               type="primary", use_container_width=True):
+                    try:
+                        st.success(db.approve_request(r["request_id"]))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not approve: {e}")
+                if c[1].button("Decline", key=f"dc_{r['request_id']}",
+                               use_container_width=True):
+                    try:
+                        db.decline_request(r["request_id"])
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not decline: {e}")
+
+    st.divider()
+    st.subheader("Who can edit the tree")
+
+    rows = db.contributors()
+    if not
