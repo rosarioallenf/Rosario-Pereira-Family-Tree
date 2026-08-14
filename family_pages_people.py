@@ -131,7 +131,7 @@ def _details(p):
             "record it here instead — both versions are kept and whoever finds "
             "a document settles it."
         )
-        with st.form(f"claim_{p['individual_id']}"):
+        with st.form(f"claim_{p['individual_id']}", clear_on_submit=True):
             field = st.selectbox("Which fact", [
                 "birth_date_text", "birth_year", "birth_place",
                 "death_date_text", "death_year", "death_place",
@@ -211,7 +211,7 @@ def _events(p):
         st.caption("Nothing recorded yet.")
 
     with st.expander("Add a life event"):
-        with st.form(f"ev_{p['individual_id']}"):
+        with st.form(f"ev_{p['individual_id']}", clear_on_submit=True):
             etype = st.selectbox("Type", db.event_types())
             date_text = st.text_input("Date", placeholder="14 MAR 1948, or ABT 1948")
             year = st.number_input("Year", 1000, 2100, step=1, value=None)
@@ -257,7 +257,7 @@ def _sources(p):
                         horizontal=True, key=f"srcmode_{p['individual_id']}")
 
         if mode == "Use an existing one" and opts:
-            with st.form(f"cite_{p['individual_id']}"):
+            with st.form(f"cite_{p['individual_id']}", clear_on_submit=True):
                 pick = st.selectbox("Which source", list(opts.keys()))
                 fact = st.text_input("What does it prove?", placeholder="Birth date")
                 if st.form_submit_button("Cite it"):
@@ -265,7 +265,7 @@ def _sources(p):
                     st.success("Cited.")
                     st.rerun()
         else:
-            with st.form(f"newsrc_{p['individual_id']}"):
+            with st.form(f"newsrc_{p['individual_id']}", clear_on_submit=True):
                 title = st.text_input("Title", placeholder="1930 US Federal Census")
                 stype = st.selectbox("Type", db.source_types())
                 qual = st.selectbox("Quality", db.qualities(),
@@ -384,7 +384,28 @@ def add_person_form():
         "inventing a date — a wrong date sends everyone hunting the wrong records."
     )
 
-    with st.form("addperson"):
+    if st.session_state.get("_pending_person"):
+        _confirm_duplicate()
+        return
+
+    if st.session_state.get("_just_added"):
+        added = st.session_state["_just_added"]
+        st.success(f"Added **{added['name']}** as {added['id']}.")
+        st.info(
+            "Now connect them: use **Marriages & children** to record their "
+            "parents, spouse, or children."
+        )
+        c = st.columns(2)
+        if c[0].button("Add another person", type="primary", use_container_width=True):
+            del st.session_state["_just_added"]
+            st.rerun()
+        if c[1].button("Open their page", use_container_width=True):
+            st.session_state["open_person"] = added["id"]
+            del st.session_state["_just_added"]
+            st.rerun()
+        return
+
+    with st.form("addperson", clear_on_submit=True):
         c = st.columns(2)
         with c[0]:
             given = st.text_input("Given names *", placeholder="William John, not Bill")
@@ -406,34 +427,102 @@ def add_person_form():
         occ = st.text_input("Occupation")
         notes = st.text_area("Anything else worth recording", height=90)
 
-        if st.form_submit_button("Add to the tree", type="primary"):
-            if not given.strip():
-                st.error("At least a given name is needed.")
-            else:
-                try:
-                    new_id = db.add_person({
-                        "given_names": given.strip(),
-                        "surname_at_birth": surname.strip(),
-                        "also_known_as": aka.strip(),
-                        "sex_code": sex,
-                        "generation_code": gen,
-                        "is_living": living,
-                        "birth_date_text": bdate,
-                        "birth_year": int(byear) if byear else None,
-                        "birth_place": bplace,
-                        "death_date_text": ddate,
-                        "death_year": int(dyear) if dyear else None,
-                        "death_place": dplace,
-                        "occupation": occ,
-                        "notes": notes,
-                    })
-                    st.success(f"Added as {new_id}.")
-                    st.info(
-                        "Now connect them: use **Marriages & children** to record "
-                        "their parents, spouse, or children."
-                    )
-                except Exception as e:
-                    st.error(_friendly(e))
+        submitted = st.form_submit_button("Add to the tree", type="primary")
+
+    if not submitted:
+        return
+
+    if not given.strip():
+        st.error("At least a given name is needed.")
+        return
+
+    record = {
+        "given_names": given.strip(),
+        "surname_at_birth": surname.strip(),
+        "also_known_as": aka.strip(),
+        "sex_code": sex,
+        "generation_code": gen,
+        "is_living": living,
+        "birth_date_text": bdate,
+        "birth_year": int(byear) if byear else None,
+        "birth_place": bplace,
+        "death_date_text": ddate,
+        "death_year": int(dyear) if dyear else None,
+        "death_place": dplace,
+        "occupation": occ,
+        "notes": notes,
+    }
+
+    matches = db.possible_duplicates(record["given_names"],
+                                     record["surname_at_birth"],
+                                     record["birth_year"])
+    if matches:
+        st.session_state["_pending_person"] = {"record": record, "matches": matches}
+        st.rerun()
+
+    _save_person(record)
+
+
+def _save_person(record: dict):
+    """Insert and switch the page into its confirmation state."""
+    try:
+        new_id = db.add_person(record)
+        st.session_state["_just_added"] = {
+            "id": new_id,
+            "name": " ".join(x for x in [record["given_names"],
+                                         record["surname_at_birth"]] if x),
+        }
+        st.rerun()
+    except Exception as e:
+        st.error(_friendly(e))
+
+
+def _confirm_duplicate():
+    """Shown when the person being added looks like someone already in the tree."""
+    pending = st.session_state["_pending_person"]
+    record = pending["record"]
+    matches = pending["matches"]
+
+    name = " ".join(x for x in [record["given_names"], record["surname_at_birth"]] if x)
+
+    st.warning(f"**{name}** may already be in the tree.")
+    st.caption(
+        "Families reuse names, so this is often a genuinely different person — "
+        "a nephew named after an uncle, two cousins sharing a grandfather's name. "
+        "Have a look before deciding."
+    )
+
+    st.markdown("### Already in the tree")
+    for m in matches:
+        with st.container(border=True):
+            born = m.get("birth_date_text") or m.get("birth_year") or "birth not recorded"
+            st.markdown(f"**{m['full_name']}** · {m['individual_id']}")
+            st.caption(f"Born {born}" + (f" · {m['birth_place']}" if m.get("birth_place") else ""))
+            if m.get("father_name") or m.get("mother_name"):
+                st.caption(
+                    f"Parents: {m.get('father_name') or '?'} and {m.get('mother_name') or '?'}"
+                )
+            if st.button("This is the same person — open their page",
+                         key=f"same_{m['individual_id']}"):
+                st.session_state["open_person"] = m["individual_id"]
+                del st.session_state["_pending_person"]
+                st.rerun()
+
+    st.markdown("### What you were adding")
+    with st.container(border=True):
+        born = record.get("birth_date_text") or record.get("birth_year") or "birth not recorded"
+        st.markdown(f"**{name}**")
+        st.caption(f"Born {born}" + (f" · {record['birth_place']}" if record.get("birth_place") else ""))
+
+    st.divider()
+    c = st.columns(2)
+    if c[0].button("Add anyway — this is someone different",
+                   type="primary", use_container_width=True):
+        del st.session_state["_pending_person"]
+        _save_person(record)
+    if c[1].button("Cancel — don't add", use_container_width=True):
+        del st.session_state["_pending_person"]
+        st.rerun()
 
 
 # ===================================================================
