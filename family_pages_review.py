@@ -266,4 +266,60 @@ def approvals_page():
     st.subheader("Who can edit the tree")
 
     rows = db.contributors()
-    if not
+    if not rows:
+        return
+
+    me = db.me() or {}
+    admin_count = sum(1 for r in rows if r.get("is_admin"))
+
+    st.caption(
+        "Admins can approve new people and make other people admins. "
+        "Everyone else can edit the tree freely — admin is only about "
+        "who gets let in."
+    )
+
+    if admin_count == 1:
+        st.warning(
+            "**There is only one admin.** If that person cannot get to the app, "
+            "nobody can let new relatives in. Worth making a second person an "
+            "admin — ideally someone a generation younger."
+        )
+
+    for r in rows:
+        with st.container(border=True):
+            c = st.columns([4, 2])
+            label = r["display_name"]
+            if r["contributor_id"] == me.get("contributor_id"):
+                label += "  (you)"
+            c[0].markdown(f"**{label}**")
+            bits = [x for x in [r.get("relationship"), r.get("email")] if x]
+            if bits:
+                c[0].caption(" · ".join(bits))
+            if r.get("is_admin"):
+                c[0].caption("Admin")
+
+            if r.get("is_admin"):
+                disabled = admin_count <= 1
+                if c[1].button(
+                    "Remove admin",
+                    key=f"unadmin_{r['contributor_id']}",
+                    disabled=disabled,
+                    use_container_width=True,
+                    help="There must always be at least one admin." if disabled else None,
+                ):
+                    try:
+                        st.success(db.set_admin(r["contributor_id"], False))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+            else:
+                if c[1].button(
+                    "Make admin",
+                    key=f"admin_{r['contributor_id']}",
+                    use_container_width=True,
+                ):
+                    try:
+                        st.success(db.set_admin(r["contributor_id"], True))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
