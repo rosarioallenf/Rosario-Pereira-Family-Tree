@@ -311,6 +311,23 @@ def update_family(family_id: str, data: dict):
     return tbl("family").update(clean).eq("family_id", family_id).execute()
 
 
+def soft_delete_family(family_id: str):
+    """
+    Remove a marriage. Any child links hanging off it go too, otherwise
+    they would point at a marriage that no longer shows anywhere.
+    The PEOPLE are untouched - only the marriage record and its links.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+
+    for link in children_of_family(family_id):
+        tbl("child_link").update({"deleted_at": now}) \
+            .eq("child_link_id", link["child_link_id"]).execute()
+
+    return tbl("family").update({"deleted_at": now}) \
+        .eq("family_id", family_id).execute()
+
+
 # ----------------------------------------------------------------- links
 
 def children_of_family(family_id: str) -> list[dict]:
