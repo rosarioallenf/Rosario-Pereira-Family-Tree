@@ -443,3 +443,17 @@ def stats() -> dict:
         "unsourced": len(unsourced()),
         "disputes": len(disputed_facts()),
     }
+
+
+def set_admin(contributor_id: str, make_admin: bool) -> str:
+    return rpc("set_contributor_admin", {
+        "p_contributor_id": contributor_id,
+        "p_is_admin": make_admin,
+    }).execute().data
+
+
+def admins() -> list[dict]:
+    try:
+        return tbl("v_admins").select("*").execute().data or []
+    except Exception:
+        return []
