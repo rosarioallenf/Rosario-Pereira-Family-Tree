@@ -97,6 +97,58 @@ def me() -> dict | None:
     return row
 
 
+# -------------------------------------------------- joining the tree
+
+def my_join_status() -> str:
+    """'approved', 'pending', 'declined', or 'none'."""
+    try:
+        return rpc("my_join_status").execute().data or "none"
+    except Exception:
+        return "none"
+
+
+def request_to_join(display_name: str, relationship: str, message: str = ""):
+    user = current_user()
+    return tbl("join_request").insert({
+        "user_id": user.id,
+        "email": user.email,
+        "display_name": display_name.strip(),
+        "relationship": relationship.strip() or None,
+        "message": message.strip() or None,
+    }).execute()
+
+
+def pending_requests() -> list[dict]:
+    try:
+        r = (tbl("join_request").select("*")
+             .eq("status", "pending").order("requested_at").execute())
+        return r.data or []
+    except Exception:
+        return []
+
+
+def approve_request(request_id: int) -> str:
+    return rpc("approve_join_request", {"p_request_id": request_id}).execute().data
+
+
+def decline_request(request_id: int) -> str:
+    return rpc("decline_join_request", {"p_request_id": request_id}).execute().data
+
+
+def set_admin(contributor_id: str, make_admin: bool) -> str:
+    return rpc("set_contributor_admin", {
+        "p_contributor_id": contributor_id,
+        "p_is_admin": make_admin,
+    }).execute().data
+
+
+def admins() -> list[dict]:
+    try:
+        return tbl("v_admins").select("*").execute().data or []
+    except Exception:
+        return []
+
+
 # --------------------------------------------------------------- lookups
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -155,6 +207,42 @@ def add_person(data: dict) -> str:
     clean = {k: v for k, v in data.items() if v not in ("", None)}
     r = tbl("individual").insert(clean).execute()
     return r.data[0]["individual_id"]
+
+
+def possible_duplicates(given: str, surname: str, birth_year=None) -> list[dict]:
+    """
+    People already in the tree who look like the same person.
+
+    Deliberately loose: a near-match is worth a second look even when it turns
+    out to be a genuine different person. Families reuse names heavily, so this
+    warns rather than blocks.
+    """
+    given = (given or "").strip().lower()
+    surname = (surname or "").strip().lower()
+    if not given:
+        return []
+
+    first = given.split()[0]
+    hits = []
+    for p in people(limit=2000):
+        pg = (p.get("given_names") or "").strip().lower()
+        ps = (p.get("surname_at_birth") or "").strip().lower()
+        if not pg:
+            continue
+
+        same_first = pg.split()[0] == first
+        same_full = pg == given
+        surname_ok = (ps == surname) or not ps or not surname
+
+        if not ((same_full and surname_ok) or (same_first and ps == surname and surname)):
+            continue
+
+        if birth_year and p.get("birth_year"):
+            if abs(int(birth_year) - int(p["birth_year"])) > 3:
+                continue
+
+        hits.append(p)
+    return hits
 
 
 def update_person(individual_id: str, data: dict):
@@ -443,52 +531,3 @@ def stats() -> dict:
         "unsourced": len(unsourced()),
         "disputes": len(disputed_facts()),
     }
-
-
-def set_admin(contributor_id: str, make_admin: bool) -> str:
-    return rpc("set_contributor_admin", {
-        "p_contributor_id": contributor_id,
-        "p_is_admin": make_admin,
-    }).execute().data
-
-
-def admins() -> list[dict]:
-    try:
-        return tbl("v_admins").select("*").execute().data or []
-    except Exception:
-        return []
-
-
-def my_join_status() -> str:
-    try:
-        return rpc("my_join_status").execute().data or "none"
-    except Exception:
-        return "none"
-
-
-def request_to_join(display_name: str, relationship: str, message: str = ""):
-    user = current_user()
-    return tbl("join_request").insert({
-        "user_id": user.id,
-        "email": user.email,
-        "display_name": display_name.strip(),
-        "relationship": relationship.strip() or None,
-        "message": message.strip() or None,
-    }).execute()
-
-
-def pending_requests() -> list[dict]:
-    try:
-        r = (tbl("join_request").select("*")
-             .eq("status", "pending").order("requested_at").execute())
-        return r.data or []
-    except Exception:
-        return []
-
-
-def approve_request(request_id: int) -> str:
-    return rpc("approve_join_request", {"p_request_id": request_id}).execute().data
-
-
-def decline_request(request_id: int) -> str:
-    return rpc("decline_join_request", {"p_request_id": request_id}).execute().data
