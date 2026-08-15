@@ -28,7 +28,7 @@ st.set_page_config(
 # share it as "anyone with the link can view", and paste the link below.
 # Updating the document in Drive updates what everyone sees - no redeploy.
 
-HELP_URL = ""   # <-- paste the share link here, between the quotes
+HELP_URL = "https://drive.google.com/drive/folders/1by7DeR5n1IUgwMJS7gENMunc2jpwS7FQ?usp=drive_link"
 
 
 def help_page():
