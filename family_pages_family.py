@@ -45,7 +45,7 @@ def _new_family():
                        use_container_width=True):
             del st.session_state["_just_married"]
             st.rerun()
-        if c[1].button("Done", use_container_width=True):
+        if c[1].button("Done", key="done_marriage", use_container_width=True):
             del st.session_state["_just_married"]
             st.rerun()
         return
@@ -127,7 +127,7 @@ def _link_child():
         if c[0].button("Link another child", type="primary", use_container_width=True):
             del st.session_state["_just_linked"]
             st.rerun()
-        if c[1].button("Done", use_container_width=True):
+        if c[1].button("Done", key="done_link", use_container_width=True):
             del st.session_state["_just_linked"]
             st.rerun()
         return
