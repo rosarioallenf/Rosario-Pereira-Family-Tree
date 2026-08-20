@@ -548,3 +548,118 @@ def stats() -> dict:
         "unsourced": len(unsourced()),
         "disputes": len(disputed_facts()),
     }
+
+
+# ==================================================================
+# ADDING A RELATIVE IN ONE STEP
+# ------------------------------------------------------------------
+# The database stores people, marriages and child links as three
+# separate things. Relatives do not think that way - they think
+# "add my father". These functions do all three behind one action.
+# ==================================================================
+
+_GEN_ORDER = ["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7"]
+
+
+def suggest_generation(anchor_gen, relation: str):
+    """Father of a G4 is probably G3; their child probably G5."""
+    if not anchor_gen or anchor_gen not in _GEN_ORDER:
+        return None
+    i = _GEN_ORDER.index(anchor_gen)
+    shift = {"father": -1, "mother": -1, "child": 1, "spouse": 0, "sibling": 0}
+    j = i + shift.get(relation, 0)
+    if 0 <= j < len(_GEN_ORDER):
+        return _GEN_ORDER[j]
+    return None
+
+
+def _ensure_birth_family(anchor_id: str) -> str:
+    """The family the anchor was born into, creating an empty one if needed."""
+    bf = birth_family_of(anchor_id)
+    if bf:
+        return bf["family_id"]
+    fam_id = add_family({})
+    link_child(fam_id, anchor_id)
+    return fam_id
+
+
+def add_relative(anchor_id: str, relation: str, person_data: dict,
+                 family_id=None, marriage=None):
+    """
+    Create a person and connect them to anchor_id in one go.
+
+    relation: 'father' | 'mother' | 'spouse' | 'child' | 'sibling'
+    Returns (new_individual_id, plain-English description).
+    Raises ValueError with a readable message when the link is not possible.
+    """
+    anchor = person(anchor_id)
+    if not anchor:
+        raise ValueError("That person is no longer in the tree.")
+    anchor_name = anchor["full_name"]
+
+    if relation in ("father", "mother"):
+        slot = "partner1_id" if relation == "father" else "partner2_id"
+        bf = birth_family_of(anchor_id)
+
+        if bf:
+            fam_id = bf["family_id"]
+            fam = family(fam_id)
+            if fam and fam.get(slot):
+                who = name_of(fam[slot])
+                raise ValueError(
+                    f"{anchor_name} already has a {relation} recorded: {who}. "
+                    f"Open {who} to correct that record instead."
+                )
+            new_id = add_person(person_data)
+            update_family(fam_id, {slot: new_id})
+        else:
+            new_id = add_person(person_data)
+            fam_id = add_family({slot: new_id})
+            link_child(fam_id, anchor_id)
+
+        return new_id, f"Added as {anchor_name}'s {relation}."
+
+    if relation == "spouse":
+        new_id = add_person(person_data)
+        row = {"partner1_id": anchor_id, "partner2_id": new_id}
+        if marriage:
+            row.update({k: v for k, v in marriage.items() if v not in ("", None)})
+        add_family(row)
+        return new_id, f"Added as {anchor_name}'s spouse or partner."
+
+    if relation == "child":
+        fams = families_of(anchor_id)
+        if family_id:
+            fam_id = family_id
+        elif len(fams) == 1:
+            fam_id = fams[0]["family_id"]
+        elif not fams:
+            fam_id = add_family({"partner1_id": anchor_id})
+        else:
+            raise ValueError(
+                f"{anchor_name} has more than one marriage recorded. "
+                "Choose which one this child belongs to."
+            )
+        new_id = add_person(person_data)
+        link_child(fam_id, new_id)
+        return new_id, f"Added as a child of {anchor_name}."
+
+    if relation == "sibling":
+        fam_id = _ensure_birth_family(anchor_id)
+        new_id = add_person(person_data)
+        link_child(fam_id, new_id)
+        return new_id, f"Added as {anchor_name}'s brother or sister."
+
+    raise ValueError(f"Unknown relationship: {relation}")
+
+
+def marriages_of_labelled(individual_id: str) -> dict:
+    """{'with Mary COLE (1912)': 'F0001'} - for choosing between marriages."""
+    out = {}
+    for f in families_of(individual_id):
+        other = f["partner2_id"] if f["partner1_id"] == individual_id else f["partner1_id"]
+        label = f"with {name_of(other) or 'partner not recorded'}"
+        if f.get("marriage_year"):
+            label += f" ({f['marriage_year']})"
+        out[label] = f["family_id"]
+    return out
