@@ -88,7 +88,7 @@ def _profile(individual_id: str):
     with tabs[0]:
         _details(p)
     with tabs[1]:
-        _family_section(p)
+        _family_tab(p)
     with tabs[2]:
         _events(p)
     with tabs[3]:
@@ -554,3 +554,242 @@ def _friendly(e) -> str:
         if key in msg:
             return friendly
     return f"Could not save that: {msg}"
+
+
+# ===================================================================
+# FAMILY TAB - add relatives in one step
+# -------------------------------------------------------------------
+# Jovan's note was right: asking someone to add a person, then go to
+# another page and link them, is the database's shape showing through.
+# Here you press "Add father" on a person's page and it does all of it.
+# ===================================================================
+
+_RELATIONS = [
+    ("father",  "Add father"),
+    ("mother",  "Add mother"),
+    ("spouse",  "Add spouse"),
+    ("child",   "Add child"),
+    ("sibling", "Add brother or sister"),
+]
+
+_RELATION_HELP = {
+    "father":  "Creates the person and records them as this person's father.",
+    "mother":  "Creates the person and records them as this person's mother.",
+    "spouse":  "Creates the person and records the marriage or partnership.",
+    "child":   "Creates the person and attaches them to this person's family.",
+    "sibling": "Creates the person and attaches them to the same parents.",
+}
+
+
+def _family_tab(p):
+    pid = p["individual_id"]
+
+    pending = st.session_state.get("_add_rel")
+    if pending and pending.get("anchor") == pid:
+        _add_relative_form(p, pending["relation"])
+        return
+
+    done = st.session_state.get("_rel_added")
+    if done and done.get("anchor") == pid:
+        st.success(done["message"])
+        c = st.columns(2)
+        if c[0].button("Open their page", type="primary", use_container_width=True):
+            st.session_state["open_person"] = done["new_id"]
+            del st.session_state["_rel_added"]
+            st.rerun()
+        if c[1].button("Stay here", use_container_width=True):
+            del st.session_state["_rel_added"]
+            st.rerun()
+        st.divider()
+
+    _show_family(p)
+
+    st.divider()
+    st.markdown("### Add a relative")
+    st.caption(
+        "This creates the person and connects them in one step — no need to "
+        "visit another page."
+    )
+    cols = st.columns(len(_RELATIONS))
+    for i, (rel, label) in enumerate(_RELATIONS):
+        if cols[i].button(label, key=f"rel_{rel}_{pid}", use_container_width=True):
+            st.session_state["_add_rel"] = {"anchor": pid, "relation": rel}
+            st.rerun()
+
+
+def _show_family(p):
+    """The existing relatives, unchanged in substance from before."""
+    pid = p["individual_id"]
+
+    st.markdown("### Parents")
+    if p.get("father_id") or p.get("mother_id"):
+        for label, key, nkey in [("Father", "father_id", "father_name"),
+                                 ("Mother", "mother_id", "mother_name")]:
+            if p.get(key):
+                if st.button(f"{label}: {p.get(nkey) or p[key]}", key=f"go_{key}_{pid}"):
+                    st.session_state["open_person"] = p[key]
+                    st.rerun()
+    else:
+        st.caption("Not recorded yet — use the buttons below.")
+
+    sibs = db.siblings_of(pid)
+    if sibs:
+        st.markdown("### Brothers and sisters")
+        for s in sibs:
+            yr = f" ({s['birth_year']})" if s.get("birth_year") else ""
+            if st.button(f"{s['full_name']}{yr}", key=f"sib_{s['individual_id']}_{pid}"):
+                st.session_state["open_person"] = s["individual_id"]
+                st.rerun()
+
+    fams = db.families_of(pid)
+    if fams:
+        st.markdown("### Marriages and children")
+    for f in fams:
+        other = f["partner2_id"] if f["partner1_id"] == pid else f["partner1_id"]
+        header = db.name_of(other) or "partner not recorded"
+        yr = f" — married {f['marriage_year']}" if f.get("marriage_year") else ""
+        st.markdown(f"**{header}**{yr}")
+        kids = db.children_of_family(f["family_id"])
+        if not kids:
+            st.caption("No children recorded.")
+        for k in kids:
+            kid = db.person(k["child_id"])
+            if not kid:
+                continue
+            byr = f" ({kid['birth_year']})" if kid.get("birth_year") else ""
+            rel = ""
+            if k.get("relationship_code") not in (None, "Natural"):
+                rel = f" · {k['relationship_code']}"
+            if st.button(f"↳ {kid['full_name']}{byr}{rel}", key=f"kid_{k['child_link_id']}"):
+                st.session_state["open_person"] = k["child_id"]
+                st.rerun()
+
+
+def _add_relative_form(p, relation):
+    pid = p["individual_id"]
+    label = dict(_RELATIONS)[relation]
+
+    st.markdown(f"### {label}")
+    st.caption(f"For **{p['full_name']}**. {_RELATION_HELP[relation]}")
+
+    chosen_family = None
+    if relation == "child":
+        marriages = db.marriages_of_labelled(pid)
+        if len(marriages) > 1:
+            pick = st.selectbox("Which marriage?", list(marriages.keys()),
+                                key=f"whichfam_{pid}")
+            chosen_family = marriages[pick]
+
+    suggested_gen = db.suggest_generation(p.get("generation_code"), relation)
+
+    with st.form(f"addrel_{relation}_{pid}", clear_on_submit=False):
+        c = st.columns(2)
+        with c[0]:
+            given = st.text_input("Given names *", placeholder="William John, not Bill")
+            surname = st.text_input(
+                "Surname at birth",
+                value=(p.get("surname_at_birth") or "")
+                      if relation in ("child", "sibling", "father") else "",
+                help="For a married woman, her maiden name.",
+            )
+            aka = st.text_input("Also known as")
+            sex = _sel("Sex", db.sexes(),
+                       "M" if relation == "father" else
+                       "F" if relation == "mother" else None)
+            gen = _sel("Generation", db.generations(), suggested_gen)
+            living = st.checkbox("Still living", value=True)
+        with c[1]:
+            bdate = st.text_input("Birth date", placeholder="14 MAR 1948, or ABT 1948")
+            byear = st.number_input("Birth year", 1000, 2100, step=1, value=None)
+            bplace = st.text_input("Birth place", placeholder="Town, County, State, Country")
+            ddate = st.text_input("Death date")
+            dyear = st.number_input("Death year", 1000, 2100, step=1, value=None)
+            dplace = st.text_input("Death place")
+
+        marriage_bits = {}
+        if relation == "spouse":
+            st.markdown("**The marriage itself** (optional)")
+            m = st.columns(3)
+            marriage_bits["marriage_date_text"] = m[0].text_input(
+                "Marriage date", placeholder="22 DEC 1912")
+            marriage_bits["marriage_year"] = m[1].number_input(
+                "Year", 1000, 2100, step=1, value=None)
+            marriage_bits["marriage_place"] = m[2].text_input("Place")
+            marriage_bits["union_status_code"] = st.selectbox(
+                "Status", [""] + db.union_status()) or None
+
+        notes = st.text_area("Anything else worth recording", height=80)
+
+        cbtn = st.columns(2)
+        submitted = cbtn[0].form_submit_button(label, type="primary",
+                                               use_container_width=True)
+        cancelled = cbtn[1].form_submit_button("Cancel", use_container_width=True)
+
+    if cancelled:
+        del st.session_state["_add_rel"]
+        st.rerun()
+
+    if not submitted:
+        return
+
+    if not given.strip():
+        st.error("At least a given name is needed.")
+        return
+
+    record = {
+        "given_names": given.strip(),
+        "surname_at_birth": surname.strip(),
+        "also_known_as": aka.strip(),
+        "sex_code": sex,
+        "generation_code": gen,
+        "is_living": living,
+        "birth_date_text": bdate,
+        "birth_year": int(byear) if byear else None,
+        "birth_place": bplace,
+        "death_date_text": ddate,
+        "death_year": int(dyear) if dyear else None,
+        "death_place": dplace,
+        "notes": notes,
+    }
+
+    if marriage_bits.get("marriage_year"):
+        marriage_bits["marriage_year"] = int(marriage_bits["marriage_year"])
+
+    matches = db.possible_duplicates(record["given_names"],
+                                     record["surname_at_birth"],
+                                     record["birth_year"])
+    if matches and not st.session_state.get(f"_dupok_{pid}_{relation}"):
+        st.warning(
+            f"**{record['given_names']} {record['surname_at_birth']}** may "
+            "already be in the tree:"
+        )
+        for m in matches:
+            born = m.get("birth_date_text") or m.get("birth_year") or "birth not recorded"
+            st.markdown(f"- **{m['full_name']}** ({m['individual_id']}) — born {born}")
+        st.caption(
+            "Families reuse names, so this may well be someone different. "
+            "If it is the same person, cancel and link them from the "
+            "Marriages & children page instead."
+        )
+        if st.button("Add anyway — this is someone different",
+                     key=f"anyway_{pid}_{relation}", type="primary"):
+            st.session_state[f"_dupok_{pid}_{relation}"] = True
+            st.rerun()
+        return
+
+    try:
+        new_id, message = db.add_relative(
+            pid, relation, record,
+            family_id=chosen_family,
+            marriage=marriage_bits or None,
+        )
+        st.session_state.pop(f"_dupok_{pid}_{relation}", None)
+        del st.session_state["_add_rel"]
+        st.session_state["_rel_added"] = {
+            "anchor": pid, "new_id": new_id, "message": message,
+        }
+        st.rerun()
+    except ValueError as e:
+        st.error(str(e))
+    except Exception as e:
+        st.error(_friendly(e))
